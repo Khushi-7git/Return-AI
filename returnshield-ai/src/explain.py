@@ -78,9 +78,17 @@ def _describe_feature(feature_name: str, row: pd.Series) -> str:
             f"{abs(_number(row, feature_name)) * 100:.1f}%"
         )
     if feature_name == "serial_mismatch":
-        return "returned item serial does not match the shipped serial"
+        return (
+            "returned item serial does not match the shipped serial"
+            if _number(row, feature_name) > 0
+            else "returned item serial matches the shipped serial"
+        )
     if feature_name == "sku_mismatch":
-        return "returned product SKU does not match the order SKU"
+        return (
+            "returned product SKU does not match the order SKU"
+            if _number(row, feature_name) > 0
+            else "returned product SKU matches the order SKU"
+        )
     if feature_name == "days_after_delivery":
         return f"return was requested {_number(row, feature_name):.0f} days after delivery"
     if feature_name == "refund_ratio":
@@ -105,11 +113,23 @@ def _describe_feature(feature_name: str, row: pd.Series) -> str:
             f"{_number(row, feature_name):.0f} customer account(s)"
         )
     if feature_name == "claim_is_defect":
-        return "return reason is a defect claim"
+        return (
+            "return reason is a defect claim"
+            if _number(row, feature_name) > 0
+            else "return reason is not a defect claim"
+        )
     if feature_name == "claim_is_swap":
-        return "return reason is a wrong-item claim"
+        return (
+            "return reason is a wrong-item claim"
+            if _number(row, feature_name) > 0
+            else "return reason is not a wrong-item claim"
+        )
     if feature_name == "packaging_tampered":
-        return "returned packaging was marked tampered"
+        return (
+            "returned packaging was marked tampered"
+            if _number(row, feature_name) > 0
+            else "returned packaging was not marked tampered"
+        )
     if feature_name == "expected_weight_g":
         return f"expected item weight is {_number(row, feature_name):.0f}g"
     if feature_name == "received_weight_g":
