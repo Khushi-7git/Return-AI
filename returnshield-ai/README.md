@@ -11,8 +11,10 @@ explainable rule-based baseline, plus minimal environment checks:
   customer-separated train/validation/test assignments.
 - `src.rules.score_rules()` for repeated returns, weight mismatch,
   serial/SKU mismatch, and repeated abuse-claim patterns.
-- Empty module placeholders for future feature, model, explanation, and cost
-  work.
+- `src.explain.explain_prediction()` for plain-English SHAP reasons.
+- `src.model.score_case()` for the PRD risk score, action, estimated loss, and
+  recommended verification.
+- Empty module placeholders for future feature and cost work.
 
 ## Setup
 
@@ -40,6 +42,23 @@ python -c "from src.data_gen import generate_dataset; generate_dataset()"
 This writes `data/orders.csv`, `data/returns.csv`, and `data/split.csv`.
 `generate_dataset()` returns the orders and returns DataFrames; the confirmed
 abuse label is retained only in the returns data for evaluation.
+
+## Score a return case
+
+```bash
+python -c "from src.model import score_case; print(score_case('ORD-0000002'))"
+```
+
+`score_case()` trains its small Random Forest lazily from the generated data
+and combines its abuse probability with the rule score using a weighted blend:
+
+```text
+risk_score = rule_weight * rule_score + (1 - rule_weight) * ml_score
+```
+
+The default is a 50/50 blend. Set `RETURNSHIELD_RULE_WEIGHT` to a value from
+`0` to `1` before calling `score_case()` to configure it. The order must have a
+return record; orders without returns raise a clear error.
 
 ## Run the dashboard
 
