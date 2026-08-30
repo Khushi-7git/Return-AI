@@ -74,7 +74,7 @@ def render_return_queue() -> None:
     st.dataframe(
         queue_frame,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_config={
             "risk_score": st.column_config.NumberColumn("risk_score", format="%.3f"),
             "refund_amount": st.column_config.NumberColumn("refund_amount", format="%.2f"),
@@ -121,7 +121,7 @@ def render_case_detail() -> None:
     )
 
     st.subheader("Order timeline")
-    st.dataframe(pd.DataFrame(detail["timeline"]), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(detail["timeline"]), hide_index=True, width="stretch")
 
     st.subheader("Evidence")
     evidence = detail["evidence"]
@@ -137,11 +137,11 @@ def render_case_detail() -> None:
             {"evidence": "Inspection outcome", "value": return_record["inspection_outcome"]},
         ]
     )
-    st.dataframe(evidence_frame, hide_index=True, use_container_width=True)
+    st.dataframe(evidence_frame, hide_index=True, width="stretch")
 
     if detail["history"]:
         st.write("Prior return history")
-        st.dataframe(pd.DataFrame(detail["history"]), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(detail["history"]), hide_index=True, width="stretch")
     else:
         st.info("No prior returns found for this customer.")
 
@@ -191,7 +191,7 @@ def render_model_performance() -> None:
             index=["Actual 0", "Actual 1"],
             columns=["Predicted 0", "Predicted 1"],
         ),
-        use_container_width=True,
+        width="stretch",
     )
 
     st.subheader("Calibration")
@@ -209,7 +209,7 @@ def render_model_performance() -> None:
     st.subheader("Performance by risk band")
     st.dataframe(
         pd.DataFrame.from_dict(performance["by_risk_band"], orient="index"),
-        use_container_width=True,
+        width="stretch",
     )
 
 
@@ -241,7 +241,7 @@ def render_financial_impact() -> None:
             ]
         ),
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
     st.subheader("Policy assumptions")
