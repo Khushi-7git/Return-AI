@@ -1,0 +1,1 @@
+- [Python dependency resolver](python-dependency-resolver.md) — SHAP may fail global resolution even when the project-local Python 3.13 venv installs cleanly.
