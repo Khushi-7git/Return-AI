@@ -127,14 +127,14 @@ def render_case_detail() -> None:
     evidence = detail["evidence"]
     evidence_frame = pd.DataFrame(
         [
-            {"evidence": "Expected weight (g)", "value": evidence["expected_weight_g"]},
-            {"evidence": "Received weight (g)", "value": evidence["received_weight_g"]},
-            {"evidence": "Weight difference (g)", "value": evidence["weight_difference_g"]},
-            {"evidence": "Weight within threshold", "value": evidence["weight_match"]},
-            {"evidence": "Serial matches shipment", "value": evidence["serial_match"]},
-            {"evidence": "Prior return count", "value": evidence["prior_return_count"]},
-            {"evidence": "Order reason", "value": return_record["reason"]},
-            {"evidence": "Inspection outcome", "value": return_record["inspection_outcome"]},
+            {"evidence": "Expected weight (g)", "value": f"{evidence['expected_weight_g']:.1f}"},
+            {"evidence": "Received weight (g)", "value": f"{evidence['received_weight_g']:.1f}"},
+            {"evidence": "Weight difference (g)", "value": f"{evidence['weight_difference_g']:.1f}"},
+            {"evidence": "Weight within threshold", "value": str(evidence["weight_match"])},
+            {"evidence": "Serial matches shipment", "value": str(evidence["serial_match"])},
+            {"evidence": "Prior return count", "value": str(evidence["prior_return_count"])},
+            {"evidence": "Order reason", "value": str(return_record["reason"])},
+            {"evidence": "Inspection outcome", "value": str(return_record["inspection_outcome"])},
         ]
     )
     st.dataframe(evidence_frame, hide_index=True, width="stretch")
