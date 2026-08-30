@@ -343,15 +343,32 @@ def _recommended_verification(triggered_rules: list[str]) -> str:
     return " and ".join(checks).capitalize() + "."
 
 
-def score_case(order_id: str) -> dict[str, Any]:
-    """Return the PRD scoring payload for the latest return on an order.
+def risk_band_and_action(risk_score: float) -> tuple[str, str]:
+    """Map a 0-1 risk score to the PRD band and recommended action."""
+    if risk_score < 0.33:
+        return "Low", "approve"
+    if risk_score < 0.66:
+        return "Medium", "verify"
+    return "High", "manual_review"
 
-    The final risk score is a configurable weighted blend:
-    ``rule_weight * rule_score + (1 - rule_weight) * ml_score``. The default
-    is a 50/50 blend; set ``RETURNSHIELD_RULE_WEIGHT`` to any value from 0 to 1
-    before calling this function to change the balance.
-    """
-    context = _get_scoring_context()
+
+def _case_components(
+    context: _ScoringContext,
+    order_id: str,
+    ml_score_override: float | None = None,
+) -> tuple[
+    pd.Series,
+    pd.Series,
+    list[dict[str, Any]],
+    float,
+    list[str],
+    pd.DataFrame,
+    float,
+    float,
+    str,
+    str,
+]:
+    """Calculate shared rule/ML components without running SHAP."""
     matching_orders = context.orders.loc[context.orders["order_id"].astype(str) == str(order_id)]
     if matching_orders.empty:
         raise KeyError(f"Unknown order_id: {order_id}")
@@ -381,19 +398,114 @@ def score_case(order_id: str) -> dict[str, Any]:
         context.device_customer_counts,
     )
     feature_frame = pd.DataFrame([feature_row], columns=FEATURE_COLUMNS)
-    ml_score = _positive_class_probability(context.model, feature_frame)
+    ml_score = (
+        ml_score_override
+        if ml_score_override is not None
+        else _positive_class_probability(context.model, feature_frame)
+    )
     rule_weight = _rule_weight()
     risk_score = min(1.0, max(0.0, rule_weight * rule_score + (1 - rule_weight) * ml_score))
+    risk_band, recommended_action = risk_band_and_action(risk_score)
+    return (
+        order,
+        current_return,
+        history,
+        rule_score,
+        triggered_rules,
+        feature_frame,
+        ml_score,
+        risk_score,
+        risk_band,
+        recommended_action,
+    )
 
-    if risk_score < 0.33:
-        risk_band = "Low"
-        recommended_action = "approve"
-    elif risk_score < 0.66:
-        risk_band = "Medium"
-        recommended_action = "verify"
-    else:
-        risk_band = "High"
-        recommended_action = "manual_review"
+
+@lru_cache(maxsize=4)
+def _score_cases_cached(rule_weight: float) -> tuple[dict[str, Any], ...]:
+    """Return lightweight scores for every stored return.
+
+    This is used by queue and analytics endpoints and intentionally skips SHAP
+    text generation so a whole dataset can be ranked efficiently. Individual
+    ``score_case`` calls include the full top-reason explanation.
+    """
+    context = _get_scoring_context()
+    all_features = context.features.loc[:, FEATURE_COLUMNS]
+    all_probabilities = context.model.predict_proba(all_features)
+    classes = list(context.model.classes_)
+    positive_index = classes.index(1) if 1 in classes else int(np.argmax(classes))
+    ml_scores = dict(
+        zip(
+            context.features.index,
+            all_probabilities[:, positive_index].astype(float),
+        )
+    )
+    results: list[dict[str, Any]] = []
+    for return_record in context.returns.to_dict("records"):
+        components = _case_components(
+            context,
+            str(return_record["order_id"]),
+            ml_score_override=ml_scores[str(return_record["return_id"])],
+        )
+        (
+            _order,
+            current_return,
+            _history,
+            rule_score,
+            triggered_rules,
+            _feature_frame,
+            ml_score,
+            risk_score,
+            risk_band,
+            recommended_action,
+        ) = components
+        refund_amount = float(current_return.get("refund_amount", 0.0) or 0.0)
+        results.append(
+            {
+                "return_id": str(current_return["return_id"]),
+                "order_id": str(current_return["order_id"]),
+                "rule_score": float(round(rule_score, 6)),
+                "ml_score": float(round(ml_score, 6)),
+                "risk_score": float(round(risk_score, 6)),
+                "risk_band": risk_band,
+                "recommended_action": recommended_action,
+                "estimated_loss_if_approved": float(round(refund_amount * risk_score, 2)),
+                "triggered_rules": triggered_rules,
+                "refund_amount": refund_amount,
+                "confirmed_abuse_label": int(current_return["confirmed_abuse_label"]),
+            }
+        )
+    return tuple(results)
+
+
+def score_cases() -> list[dict[str, Any]]:
+    """Return cached lightweight scores for every stored return."""
+    return [
+        {**row, "triggered_rules": list(row["triggered_rules"])}
+        for row in _score_cases_cached(_rule_weight())
+    ]
+
+
+def score_case(order_id: str) -> dict[str, Any]:
+    """Return the PRD scoring payload for the latest return on an order.
+
+    The final risk score is a configurable weighted blend:
+    ``rule_weight * rule_score + (1 - rule_weight) * ml_score``. The default
+    is a 50/50 blend; set ``RETURNSHIELD_RULE_WEIGHT`` to any value from 0 to 1
+    before calling this function to change the balance.
+    """
+    context = _get_scoring_context()
+    (
+        _order,
+        current_return,
+        _history,
+        _rule_score,
+        triggered_rules,
+        feature_frame,
+        _ml_score,
+        risk_score,
+        risk_band,
+        recommended_action,
+    ) = _case_components(context, order_id)
 
     refund_amount = float(current_return.get("refund_amount", 0.0) or 0.0)
     return {

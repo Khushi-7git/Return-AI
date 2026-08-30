@@ -1,7 +1,271 @@
-"""Minimal Streamlit dashboard for environment verification."""
+"""Streamlit dashboard backed entirely by the ReturnShield FastAPI service."""
 
+from __future__ import annotations
+
+import os
+from typing import Any
+
+import pandas as pd
+import requests
 import streamlit as st
 
 
-st.title("ReturnShield AI")
-st.write("Hello from the ReturnShield AI dashboard.")
+API_BASE_URL = os.getenv("RETURNSHIELD_API_URL", "http://127.0.0.1:8000").rstrip("/")
+
+st.set_page_config(page_title="ReturnShield AI", page_icon="R", layout="wide")
+
+
+def api_get(path: str) -> Any:
+    """Fetch JSON from the FastAPI service and show a useful UI error."""
+    try:
+        response = requests.get(f"{API_BASE_URL}{path}", timeout=120)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as error:
+        st.error(f"FastAPI service unavailable: {error}")
+        st.stop()
+
+
+def api_post(path: str, **kwargs: Any) -> Any:
+    """Post to the FastAPI service and show a useful UI error."""
+    try:
+        response = requests.post(f"{API_BASE_URL}{path}", timeout=120, **kwargs)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as error:
+        st.error(f"FastAPI request failed: {error}")
+        st.stop()
+
+
+@st.cache_data(ttl=30)
+def load_queue() -> list[dict[str, Any]]:
+    return api_get("/queue")
+
+
+@st.cache_data(ttl=30)
+def load_performance() -> dict[str, Any]:
+    return api_get("/performance")
+
+
+@st.cache_data(ttl=30)
+def load_financial() -> dict[str, Any]:
+    return api_get("/financial")
+
+
+def render_return_queue() -> None:
+    st.title("Return queue")
+    st.caption("Ranked cases from the FastAPI scoring service.")
+    queue = load_queue()
+    if not queue:
+        st.info("No return cases are available.")
+        return
+
+    columns = [
+        "return_id",
+        "product",
+        "customer",
+        "risk_score",
+        "risk_band",
+        "reason",
+        "refund_amount",
+        "recommended_action",
+    ]
+    queue_frame = pd.DataFrame(queue)[columns]
+    st.dataframe(
+        queue_frame,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "risk_score": st.column_config.NumberColumn("risk_score", format="%.3f"),
+            "refund_amount": st.column_config.NumberColumn("refund_amount", format="%.2f"),
+        },
+    )
+
+    selected_return_id = st.selectbox(
+        "Select a return to inspect",
+        options=[row["return_id"] for row in queue],
+    )
+    st.session_state["selected_return_id"] = selected_return_id
+    st.info("Switch to **Case detail** to inspect evidence and submit a manual decision.")
+
+
+def render_case_detail() -> None:
+    st.title("Case detail")
+    queue = load_queue()
+    if not queue:
+        st.info("No return cases are available.")
+        return
+
+    return_ids = [row["return_id"] for row in queue]
+    default_id = st.session_state.get("selected_return_id", return_ids[0])
+    default_index = return_ids.index(default_id) if default_id in return_ids else 0
+    selected_return_id = st.selectbox(
+        "Return case",
+        options=return_ids,
+        index=default_index,
+    )
+    st.session_state["selected_return_id"] = selected_return_id
+    detail = api_get(f"/case/{selected_return_id}")
+    score = detail["score"]
+    order = detail["order"]
+    return_record = detail["return"]
+
+    st.subheader(f"{selected_return_id} · {order['product_id']}")
+    metric_columns = st.columns(4)
+    metric_columns[0].metric("Risk score", f"{score['risk_score']:.3f}")
+    metric_columns[1].metric("Risk band", score["risk_band"])
+    metric_columns[2].metric("Recommended action", score["recommended_action"])
+    metric_columns[3].metric(
+        "Estimated loss",
+        f"{score['estimated_loss_if_approved']:.2f}",
+    )
+
+    st.subheader("Order timeline")
+    st.dataframe(pd.DataFrame(detail["timeline"]), hide_index=True, use_container_width=True)
+
+    st.subheader("Evidence")
+    evidence = detail["evidence"]
+    evidence_frame = pd.DataFrame(
+        [
+            {"evidence": "Expected weight (g)", "value": evidence["expected_weight_g"]},
+            {"evidence": "Received weight (g)", "value": evidence["received_weight_g"]},
+            {"evidence": "Weight difference (g)", "value": evidence["weight_difference_g"]},
+            {"evidence": "Weight within threshold", "value": evidence["weight_match"]},
+            {"evidence": "Serial matches shipment", "value": evidence["serial_match"]},
+            {"evidence": "Prior return count", "value": evidence["prior_return_count"]},
+            {"evidence": "Order reason", "value": return_record["reason"]},
+            {"evidence": "Inspection outcome", "value": return_record["inspection_outcome"]},
+        ]
+    )
+    st.dataframe(evidence_frame, hide_index=True, use_container_width=True)
+
+    if detail["history"]:
+        st.write("Prior return history")
+        st.dataframe(pd.DataFrame(detail["history"]), hide_index=True, use_container_width=True)
+    else:
+        st.info("No prior returns found for this customer.")
+
+    st.subheader("SHAP top reasons")
+    for reason in score["top_reasons"]:
+        st.write(f"- {reason}")
+
+    st.subheader("Manual override")
+    st.caption("The selected decision is written to SQLite as reviewer feedback.")
+    button_columns = st.columns(3)
+    decisions = [
+        ("Approve", "approve"),
+        ("Verify", "verify"),
+        ("Manual review", "manual_review"),
+    ]
+    for column, (label, decision) in zip(button_columns, decisions):
+        if column.button(label, key=f"feedback-{selected_return_id}-{decision}"):
+            feedback = api_post(
+                f"/feedback/{selected_return_id}",
+                json={"decision": decision},
+            )
+            st.success(f"Saved reviewer decision: {feedback['reviewer_decision']}")
+            load_queue.clear()
+
+    if detail["latest_feedback"]:
+        st.caption(
+            "Latest reviewer decision: "
+            f"{detail['latest_feedback']['reviewer_decision']} "
+            f"at {detail['latest_feedback']['reviewed_at']}"
+        )
+
+
+def render_model_performance() -> None:
+    st.title("Model performance")
+    performance = load_performance()
+    overall = performance["overall"]
+    metric_columns = st.columns(4)
+    metric_columns[0].metric("Precision", f"{overall['precision']:.3f}")
+    metric_columns[1].metric("Recall", f"{overall['recall']:.3f}")
+    metric_columns[2].metric("F1", f"{overall['f1']:.3f}")
+    metric_columns[3].metric("PR-AUC", f"{overall['pr_auc']:.3f}")
+
+    st.subheader("Confusion matrix")
+    st.dataframe(
+        pd.DataFrame(
+            performance["confusion_matrix"],
+            index=["Actual 0", "Actual 1"],
+            columns=["Predicted 0", "Predicted 1"],
+        ),
+        use_container_width=True,
+    )
+
+    st.subheader("Calibration")
+    calibration = pd.DataFrame(performance["calibration"])
+    if calibration.empty:
+        st.info("Calibration data is not available.")
+    else:
+        st.line_chart(
+            calibration.set_index("predicted_probability"),
+            y="observed_rate",
+            x_label="Predicted probability",
+            y_label="Observed abuse rate",
+        )
+
+    st.subheader("Performance by risk band")
+    st.dataframe(
+        pd.DataFrame.from_dict(performance["by_risk_band"], orient="index"),
+        use_container_width=True,
+    )
+
+
+def render_financial_impact() -> None:
+    st.title("Financial impact")
+    financial = load_financial()
+    baseline = financial["baseline_approve_all_loss"]
+    rule_loss = financial["rule_based_policy_loss"]
+    model_loss = financial["model_policy_loss"]
+    metric_columns = st.columns(3)
+    metric_columns[0].metric("Approve-all loss", f"{baseline:,.2f}")
+    metric_columns[1].metric("Rule-policy loss", f"{rule_loss:,.2f}")
+    metric_columns[2].metric("Model-policy loss", f"{model_loss:,.2f}")
+
+    comparison = pd.DataFrame(
+        {
+            "policy": ["Approve all", "Rule-based", "Model-based"],
+            "estimated_loss": [baseline, rule_loss, model_loss],
+        }
+    ).set_index("policy")
+    st.bar_chart(comparison)
+
+    st.subheader("Savings vs approve-all")
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {"policy": "Rule-based", "savings": financial["savings_vs_approve_all"]["rule_based"]},
+                {"policy": "Model-based", "savings": financial["savings_vs_approve_all"]["model"]},
+            ]
+        ),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.subheader("Policy assumptions")
+    st.json(financial["assumptions"])
+    st.subheader("Action counts")
+    st.json(financial["policy_counts"])
+
+
+st.sidebar.title("ReturnShield AI")
+view = st.sidebar.radio(
+    "View",
+    [
+        "Return queue",
+        "Case detail",
+        "Model performance",
+        "Financial impact",
+    ],
+)
+
+if view == "Return queue":
+    render_return_queue()
+elif view == "Case detail":
+    render_case_detail()
+elif view == "Model performance":
+    render_model_performance()
+else:
+    render_financial_impact()

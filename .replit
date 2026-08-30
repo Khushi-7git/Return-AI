@@ -11,6 +11,43 @@ env = { "CI" = "true" }
 [workflows]
 runButton = "Project"
 
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "ReturnShield API"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "ReturnShield Dashboard"
+
+[[workflows.workflow]]
+name = "ReturnShield API"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd returnshield-ai && .venv/bin/uvicorn src.api:app --host 0.0.0.0 --port 8000"
+waitForPort = 8000
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "ReturnShield Dashboard"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd returnshield-ai && .venv/bin/streamlit run dashboard/app.py --server.address 0.0.0.0 --server.port 8008 --server.headless true"
+waitForPort = 8008
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true
