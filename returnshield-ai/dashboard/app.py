@@ -183,6 +183,16 @@ def render_model_performance() -> None:
     metric_columns[1].metric("Recall", f"{overall['recall']:.3f}")
     metric_columns[2].metric("F1", f"{overall['f1']:.3f}")
     metric_columns[3].metric("PR-AUC", f"{overall['pr_auc']:.3f}")
+    metric_columns_2 = st.columns(3)
+    metric_columns_2[0].metric("False positive rate", f"{overall['false_positive_rate']:.3f}")
+    metric_columns_2[1].metric(
+        f"Precision @ top {performance['top_capacity_metrics']['capacity_pct']}%",
+        f"{performance['top_capacity_metrics']['precision']:.3f}",
+    )
+    metric_columns_2[2].metric(
+        f"Recall @ top {performance['top_capacity_metrics']['capacity_pct']}%",
+        f"{performance['top_capacity_metrics']['recall']:.3f}",
+    )
 
     st.subheader("Confusion matrix")
     st.dataframe(
