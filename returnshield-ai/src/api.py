@@ -223,6 +223,53 @@ def feedback(return_id: str, request: FeedbackRequest) -> dict[str, Any]:
     return save_feedback(return_id, request.decision)
 
 
+def _metrics_by_group(
+    cases: list[dict[str, Any]],
+    group_key: str,
+    fixed_groups: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Calculate classification metrics for each sorted group of cases."""
+    grouped_cases: dict[str, list[dict[str, Any]]] = {}
+    for case in cases:
+        group_value = case.get(group_key)
+        group_name = "Unknown" if group_value is None else str(group_value)
+        grouped_cases.setdefault(group_name, []).append(case)
+
+    group_names = fixed_groups or sorted(grouped_cases)
+    metrics: dict[str, dict[str, Any]] = {}
+    for group_name in group_names:
+        group_cases = grouped_cases.get(group_name, [])
+        if not group_cases:
+            metrics[group_name] = {
+                "count": 0,
+                "abuse_rate": 0.0,
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0,
+                "pr_auc": None,
+            }
+            continue
+
+        group_true = [case["confirmed_abuse_label"] for case in group_cases]
+        group_pred = [int(case["risk_score"] >= 0.5) for case in group_cases]
+        metrics[group_name] = {
+            "count": len(group_cases),
+            "abuse_rate": round(sum(group_true) / len(group_true), 6),
+            "precision": precision_score(group_true, group_pred, zero_division=0),
+            "recall": recall_score(group_true, group_pred, zero_division=0),
+            "f1": f1_score(group_true, group_pred, zero_division=0),
+            "pr_auc": (
+                average_precision_score(
+                    group_true,
+                    [case["risk_score"] for case in group_cases],
+                )
+                if len(set(group_true)) > 1
+                else None
+            ),
+        }
+    return metrics
+
+
 @app.get("/performance")
 def performance(capacity_pct: int = TOP_CAPACITY_PCT) -> dict[str, Any]:
     """Return classification, calibration, and risk-band metrics."""
@@ -259,33 +306,9 @@ def performance(capacity_pct: int = TOP_CAPACITY_PCT) -> dict[str, Any]:
     tn, fp = confusion[0][0], confusion[0][1]
     false_positive_rate = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
-    band_metrics: dict[str, dict[str, Any]] = {}
-    for band in ["Low", "Medium", "High"]:
-        band_cases = [case for case in cases if case["risk_band"] == band]
-        band_true = [case["confirmed_abuse_label"] for case in band_cases]
-        band_pred = [int(case["risk_score"] >= 0.5) for case in band_cases]
-        if band_cases:
-            band_metrics[band] = {
-                "count": len(band_cases),
-                "abuse_rate": round(sum(band_true) / len(band_true), 6),
-                "precision": precision_score(band_true, band_pred, zero_division=0),
-                "recall": recall_score(band_true, band_pred, zero_division=0),
-                "f1": f1_score(band_true, band_pred, zero_division=0),
-                "pr_auc": (
-                    average_precision_score(band_true, [case["risk_score"] for case in band_cases])
-                    if len(set(band_true)) > 1
-                    else None
-                ),
-            }
-        else:
-            band_metrics[band] = {
-                "count": 0,
-                "abuse_rate": 0.0,
-                "precision": 0.0,
-                "recall": 0.0,
-                "f1": 0.0,
-                "pr_auc": None,
-            }
+    band_metrics = _metrics_by_group(cases, "risk_band", ["Low", "Medium", "High"])
+    category_metrics = _metrics_by_group(cases, "category")
+    payment_type_metrics = _metrics_by_group(cases, "payment_type")
 
     return {
         "overall": {
@@ -307,6 +330,8 @@ def performance(capacity_pct: int = TOP_CAPACITY_PCT) -> dict[str, Any]:
             "observed_rate": calibration_actual.tolist(),
         },
         "by_risk_band": band_metrics,
+        "by_category": category_metrics,
+        "by_payment_type": payment_type_metrics,
     }
 
 

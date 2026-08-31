@@ -463,6 +463,8 @@ def _score_cases_cached(rule_weight: float) -> tuple[dict[str, Any], ...]:
             {
                 "return_id": str(current_return["return_id"]),
                 "order_id": str(current_return["order_id"]),
+                "category": str(_order.get("category", "Unknown")),
+                "payment_type": str(_order.get("payment_type", "Unknown")),
                 "rule_score": float(round(rule_score, 6)),
                 "ml_score": float(round(ml_score, 6)),
                 "risk_score": float(round(risk_score, 6)),

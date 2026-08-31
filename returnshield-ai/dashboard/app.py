@@ -221,6 +221,16 @@ def render_model_performance() -> None:
         pd.DataFrame.from_dict(performance["by_risk_band"], orient="index"),
         width="stretch",
     )
+    st.subheader("Performance by category")
+    st.dataframe(
+        pd.DataFrame.from_dict(performance["by_category"], orient="index"),
+        width="stretch",
+    )
+    st.subheader("Performance by payment type")
+    st.dataframe(
+        pd.DataFrame.from_dict(performance["by_payment_type"], orient="index"),
+        width="stretch",
+    )
 
 
 def render_financial_impact() -> None:
