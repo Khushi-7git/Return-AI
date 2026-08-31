@@ -255,6 +255,9 @@ def performance(capacity_pct: int = TOP_CAPACITY_PCT) -> dict[str, Any]:
     calibration_actual, calibration_predicted = calibration_curve(
         y_true, y_score, n_bins=10, strategy="quantile"
     )
+    confusion = confusion_matrix(y_true, y_pred, labels=[0, 1]).tolist()
+    tn, fp = confusion[0][0], confusion[0][1]
+    false_positive_rate = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
     band_metrics: dict[str, dict[str, Any]] = {}
     for band in ["Low", "Medium", "High"]:
@@ -290,6 +293,7 @@ def performance(capacity_pct: int = TOP_CAPACITY_PCT) -> dict[str, Any]:
             "recall": recall,
             "f1": f1,
             "pr_auc": average_precision_score(y_true, y_score),
+            "false_positive_rate": false_positive_rate,
         },
         "top_capacity_metrics": {
             "capacity_pct": capacity_pct,
@@ -297,7 +301,7 @@ def performance(capacity_pct: int = TOP_CAPACITY_PCT) -> dict[str, Any]:
             "precision": top_capacity_precision,
             "recall": top_capacity_recall,
         },
-        "confusion_matrix": confusion_matrix(y_true, y_pred, labels=[0, 1]).tolist(),
+        "confusion_matrix": confusion,
         "calibration": {
             "predicted_probability": calibration_predicted.tolist(),
             "observed_rate": calibration_actual.tolist(),

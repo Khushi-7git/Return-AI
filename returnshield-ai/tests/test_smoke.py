@@ -25,3 +25,5 @@ def test_performance_reports_top_capacity_metrics(monkeypatch) -> None:
         "precision": 1.0,
         "recall": 0.5,
     }
+    assert metrics["overall"]["false_positive_rate"] == 0.5
+    assert metrics["confusion_matrix"] == [[1, 1], [0, 2]]
