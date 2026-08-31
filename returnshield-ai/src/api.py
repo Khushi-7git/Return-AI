@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from io import BytesIO
+from math import ceil
 from typing import Any, Literal
 
 import pandas as pd
@@ -39,6 +40,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="ReturnShield AI", lifespan=lifespan)
+TOP_CAPACITY_PCT = 5
 
 
 class FeedbackRequest(BaseModel):
@@ -222,11 +224,28 @@ def feedback(return_id: str, request: FeedbackRequest) -> dict[str, Any]:
 
 
 @app.get("/performance")
-def performance() -> dict[str, Any]:
+def performance(capacity_pct: int = TOP_CAPACITY_PCT) -> dict[str, Any]:
     """Return classification, calibration, and risk-band metrics."""
     cases = score_cases()
     y_true = [case["confirmed_abuse_label"] for case in cases]
     y_score = [case["risk_score"] for case in cases]
+    top_capacity_count = max(1, ceil(len(cases) * capacity_pct / 100))
+    ranked_cases = sorted(cases, key=lambda case: case["risk_score"], reverse=True)
+    top_capacity_cases = ranked_cases[:top_capacity_count]
+    top_capacity_true = [case["confirmed_abuse_label"] for case in ranked_cases]
+    top_capacity_pred = [
+        int(index < top_capacity_count) for index in range(len(ranked_cases))
+    ]
+    top_capacity_precision = precision_score(
+        top_capacity_true,
+        top_capacity_pred,
+        zero_division=0,
+    )
+    top_capacity_recall = recall_score(
+        top_capacity_true,
+        top_capacity_pred,
+        zero_division=0,
+    )
     y_pred = [int(score >= 0.5) for score in y_score]
     precision, recall, f1 = (
         precision_score(y_true, y_pred, zero_division=0),
@@ -271,6 +290,12 @@ def performance() -> dict[str, Any]:
             "recall": recall,
             "f1": f1,
             "pr_auc": average_precision_score(y_true, y_score),
+        },
+        "top_capacity_metrics": {
+            "capacity_pct": capacity_pct,
+            "cases_reviewed": len(top_capacity_cases),
+            "precision": top_capacity_precision,
+            "recall": top_capacity_recall,
         },
         "confusion_matrix": confusion_matrix(y_true, y_pred, labels=[0, 1]).tolist(),
         "calibration": {
