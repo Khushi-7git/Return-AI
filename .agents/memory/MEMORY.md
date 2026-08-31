@@ -1,1 +1,2 @@
 - [Python dependency resolver](python-dependency-resolver.md) — SHAP may fail global resolution even when the project-local Python 3.13 venv installs cleanly.
+- [Streamlit preview WebSockets](streamlit-preview-websocket.md) — Replit’s proxied Streamlit preview needs CORS and XSRF checks disabled for the WebSocket origin.
