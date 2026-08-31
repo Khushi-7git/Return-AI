@@ -11,6 +11,11 @@ import streamlit as st
 
 
 API_BASE_URL = os.getenv("RETURNSHIELD_API_URL", "http://127.0.0.1:8000").rstrip("/")
+RISK_BAND_STYLES = {
+    "Low": "background-color: #e8f3e8; color: #245b2a;",
+    "Medium": "background-color: #f8efd0; color: #765c00;",
+    "High": "background-color: #f7dddd; color: #8a2f2f;",
+}
 
 st.set_page_config(page_title="ReturnShield AI", page_icon="R", layout="wide")
 
@@ -60,6 +65,26 @@ def render_return_queue() -> None:
         st.info("No return cases are available.")
         return
 
+    total_cases = len(queue)
+    high_risk_count = sum(row["risk_band"] == "High" for row in queue)
+    high_risk_pct = high_risk_count / total_cases * 100
+    total_estimated_loss = sum(
+        float(
+            row.get(
+                "estimated_loss_if_approved",
+                row["risk_score"] * row["refund_amount"],
+            )
+        )
+        for row in queue
+    )
+    summary_columns = st.columns(3)
+    summary_columns[0].metric("Total cases", f"{total_cases:,}")
+    summary_columns[1].metric("High risk", f"{high_risk_pct:.1f}%")
+    summary_columns[2].metric(
+        "Estimated loss if approved",
+        f"{total_estimated_loss:,.2f}",
+    )
+
     columns = [
         "return_id",
         "product",
@@ -71,8 +96,12 @@ def render_return_queue() -> None:
         "recommended_action",
     ]
     queue_frame = pd.DataFrame(queue)[columns]
+    styled_queue_frame = queue_frame.style.map(
+        lambda value: RISK_BAND_STYLES.get(str(value), ""),
+        subset=["risk_band"],
+    )
     st.dataframe(
-        queue_frame,
+        styled_queue_frame,
         hide_index=True,
         width="stretch",
         column_config={
