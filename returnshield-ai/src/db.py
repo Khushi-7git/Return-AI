@@ -158,6 +158,13 @@ def get_order(order_id: str) -> dict[str, Any] | None:
         return _model_to_dict(record) if record else None
 
 
+def list_orders() -> list[dict[str, Any]]:
+    """Return all persisted orders for analytics and relationship features."""
+    with SessionLocal() as session:
+        records = session.scalars(select(OrderRecord)).all()
+        return [_model_to_dict(record) for record in records]
+
+
 def get_return(return_id: str) -> dict[str, Any] | None:
     with SessionLocal() as session:
         record = session.get(ReturnRecord, return_id)

@@ -8,6 +8,7 @@ from math import ceil
 from typing import Any, Literal
 
 import pandas as pd
+import networkx as nx
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sklearn.calibration import calibration_curve
@@ -27,15 +28,30 @@ from .db import (
     get_return,
     initialize_database,
     list_cases,
+    list_orders,
     save_feedback,
     save_score,
 )
+from .features import build_linked_account_graph, get_customer_ring
 from .model import score_case, score_cases
+
+
+LINKED_ACCOUNT_GRAPH: nx.Graph | None = None
+
+
+def _get_linked_account_graph() -> nx.Graph:
+    """Build the linked-account graph once and reuse it for network requests."""
+    global LINKED_ACCOUNT_GRAPH
+    if LINKED_ACCOUNT_GRAPH is None:
+        initialize_database()
+        LINKED_ACCOUNT_GRAPH = build_linked_account_graph(pd.DataFrame(list_orders()))
+    return LINKED_ACCOUNT_GRAPH
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     initialize_database()
+    _get_linked_account_graph()
     yield
 
 
@@ -221,6 +237,72 @@ def feedback(return_id: str, request: FeedbackRequest) -> dict[str, Any]:
     if get_return(return_id) is None:
         raise HTTPException(status_code=404, detail=f"Unknown return_id: {return_id}")
     return save_feedback(return_id, request.decision)
+
+
+@app.get("/network/rings")
+def network_rings() -> list[dict[str, Any]]:
+    """Return all linked-account components with at least two customers."""
+    graph = _get_linked_account_graph()
+    components = [
+        component
+        for component in nx.connected_components(graph)
+        if len(component) >= 2
+    ]
+    components.sort(
+        key=lambda component: (
+            -len(component),
+            tuple(sorted((str(member) for member in component))),
+        )
+    )
+
+    rings: list[dict[str, Any]] = []
+    for ring_id, component in enumerate(components, start=1):
+        members = sorted(component, key=str)
+        ring = get_customer_ring(graph, members[0])
+        rings.append(
+            {
+                "ring_id": ring_id,
+                "ring_size": len(component),
+                "customer_ids": members,
+                "shared_attributes": ring["shared_attributes"],
+            }
+        )
+    return rings
+
+
+@app.get("/network/{customer_id}")
+def network_customer(customer_id: str) -> dict[str, Any]:
+    """Return one customer's linked-account ring and linked history summaries."""
+    graph = _get_linked_account_graph()
+    if customer_id not in graph:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown customer_id in dataset: {customer_id}",
+        )
+
+    ring = get_customer_ring(graph, customer_id)
+    cases_by_customer: dict[str, list[dict[str, Any]]] = {}
+    if ring["linked_customers"]:
+        for case in list_cases():
+            cases_by_customer.setdefault(str(case["customer_id"]), []).append(case)
+
+    linked_customer_history = []
+    for linked_customer_id in ring["linked_customers"]:
+        history = cases_by_customer.get(str(linked_customer_id), [])
+        linked_customer_history.append(
+            {
+                "customer_id": linked_customer_id,
+                "return_count": len(history),
+                "confirmed_abuse_labels": [
+                    int(case["confirmed_abuse_label"]) for case in history
+                ],
+            }
+        )
+
+    return {
+        **ring,
+        "linked_customer_history": linked_customer_history,
+    }
 
 
 def _metrics_by_group(
