@@ -270,6 +270,20 @@ def network_rings() -> list[dict[str, Any]]:
     return rings
 
 
+def _network_edges(graph: nx.Graph, customer_id: str) -> list[dict[str, Any]]:
+    """Return deterministic edge details for a customer's connected component."""
+    component = nx.node_connected_component(graph, customer_id)
+    edges = [
+        {
+            "source": source,
+            "target": target,
+            "shared_via": sorted(edge_data.get("shared_via", [])),
+        }
+        for source, target, edge_data in graph.subgraph(component).edges(data=True)
+    ]
+    return sorted(edges, key=lambda edge: (str(edge["source"]), str(edge["target"])))
+
+
 @app.get("/network/{customer_id}")
 def network_customer(customer_id: str) -> dict[str, Any]:
     """Return one customer's linked-account ring and linked history summaries."""
@@ -294,13 +308,26 @@ def network_customer(customer_id: str) -> dict[str, Any]:
                 "customer_id": linked_customer_id,
                 "return_count": len(history),
                 "confirmed_abuse_labels": [
-                    int(case["confirmed_abuse_label"]) for case in history
+                    int(case["confirmed_abuse_label"])
+                    for case in history
+                    if case.get("confirmed_abuse_label") is not None
                 ],
             }
         )
 
+    customer_history = cases_by_customer.get(str(customer_id), [])
     return {
         **ring,
+        "edges": _network_edges(graph, customer_id),
+        "customer_history": {
+            "customer_id": customer_id,
+            "return_count": len(customer_history),
+            "confirmed_abuse_labels": [
+                int(case["confirmed_abuse_label"])
+                for case in customer_history
+                if case.get("confirmed_abuse_label") is not None
+            ],
+        },
         "linked_customer_history": linked_customer_history,
     }
 

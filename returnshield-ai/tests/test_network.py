@@ -64,6 +64,18 @@ def test_network_endpoints_return_rings_and_linked_history(monkeypatch) -> None:
         "ring_size": 2,
         "linked_customers": ["C2"],
         "shared_attributes": ["hashed_device"],
+        "edges": [
+            {
+                "source": "C1",
+                "target": "C2",
+                "shared_via": ["hashed_device"],
+            }
+        ],
+        "customer_history": {
+            "customer_id": "C1",
+            "return_count": 1,
+            "confirmed_abuse_labels": [1],
+        },
         "linked_customer_history": [
             {
                 "customer_id": "C2",

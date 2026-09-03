@@ -4,13 +4,25 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import quote
 
+import matplotlib
+import networkx as nx
 import pandas as pd
 import requests
 import streamlit as st
 
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+
 
 API_BASE_URL = os.getenv("RETURNSHIELD_API_URL", "http://127.0.0.1:8000").rstrip("/")
+NETWORK_ATTRIBUTE_LABELS = {
+    "hashed_address": "address",
+    "hashed_device": "device",
+    "hashed_payment": "payment",
+}
 RISK_BAND_STYLES = {
     "Low": "background-color: #e8f3e8; color: #245b2a;",
     "Medium": "background-color: #f8efd0; color: #765c00;",
@@ -55,6 +67,11 @@ def load_performance() -> dict[str, Any]:
 @st.cache_data(ttl=30)
 def load_financial() -> dict[str, Any]:
     return api_get("/financial")
+
+
+@st.cache_data(ttl=30)
+def load_network_rings() -> list[dict[str, Any]]:
+    return api_get("/network/rings")
 
 
 def render_return_queue() -> None:
@@ -299,6 +316,154 @@ def render_financial_impact() -> None:
     st.json(financial["policy_counts"])
 
 
+def render_abuse_network() -> None:
+    st.title("Abuse network")
+    st.caption(
+        "Investigative view of customers linked by shared address, device, or payment details."
+    )
+    rings = [
+        ring
+        for ring in load_network_rings()
+        if int(ring.get("ring_size", 0)) >= 2
+    ]
+    rings.sort(key=lambda ring: int(ring["ring_size"]), reverse=True)
+    if not rings:
+        st.info("No linked-account networks with two or more customers were detected.")
+        return
+
+    ring_table = pd.DataFrame(
+        [
+            {
+                "ring_id": ring["ring_id"],
+                "ring_size": ring["ring_size"],
+                "member_count": len(ring["customer_ids"]),
+                "shared_attributes": ", ".join(
+                    NETWORK_ATTRIBUTE_LABELS.get(attribute, attribute)
+                    for attribute in ring["shared_attributes"]
+                ),
+            }
+            for ring in rings
+        ]
+    )
+    st.dataframe(ring_table, hide_index=True, width="stretch")
+
+    ring_by_label = {
+        f"Ring {ring['ring_id']} · {ring['ring_size']} customers": ring
+        for ring in rings
+    }
+    selection_columns = st.columns(2)
+    selected_ring_label = selection_columns[0].selectbox(
+        "Select a ring",
+        options=list(ring_by_label),
+    )
+    direct_customer_id = selection_columns[1].text_input(
+        "Or enter a customer ID directly",
+        placeholder="e.g. CUST-000088",
+    ).strip()
+    selected_ring = ring_by_label[selected_ring_label]
+    customer_id = direct_customer_id or selected_ring["customer_ids"][0]
+
+    network = api_get(f"/network/{quote(customer_id, safe='')}")
+    graph = nx.Graph()
+    graph.add_nodes_from(network["linked_customers"] + [network["customer_id"]])
+    for edge in network.get("edges", []):
+        graph.add_edge(
+            edge["source"],
+            edge["target"],
+            shared_via=edge.get("shared_via", []),
+        )
+
+    if graph.number_of_nodes() < 2 or graph.number_of_edges() == 0:
+        st.info("This customer does not have a connected network to visualize.")
+        return
+
+    history_rows = [network.get("customer_history", {})] + network.get(
+        "linked_customer_history",
+        [],
+    )
+    history_by_customer = {
+        str(row["customer_id"]): row
+        for row in history_rows
+        if row.get("customer_id") is not None
+    }
+    abuse_customers = {
+        customer
+        for customer, row in history_by_customer.items()
+        if any(int(label) == 1 for label in row.get("confirmed_abuse_labels", []))
+    }
+
+    positions = nx.spring_layout(graph, seed=42)
+    figure, axis = plt.subplots(figsize=(11, 7))
+    nx.draw_networkx_edges(
+        graph,
+        positions,
+        ax=axis,
+        edge_color="#9aa5b1",
+        width=1.8,
+    )
+    nx.draw_networkx_nodes(
+        graph,
+        positions,
+        ax=axis,
+        node_color=[
+            "#c95c5c" if str(node) in abuse_customers else "#5b8db8"
+            for node in graph.nodes
+        ],
+        node_size=1800,
+        edgecolors="#263238",
+        linewidths=1.0,
+    )
+    nx.draw_networkx_labels(
+        graph,
+        positions,
+        ax=axis,
+        font_size=8,
+        font_color="white",
+        font_weight="bold",
+    )
+    edge_labels = {
+        (edge["source"], edge["target"]): ", ".join(
+            NETWORK_ATTRIBUTE_LABELS.get(attribute, attribute)
+            for attribute in edge.get("shared_via", [])
+        )
+        for edge in network.get("edges", [])
+    }
+    nx.draw_networkx_edge_labels(
+        graph,
+        positions,
+        edge_labels=edge_labels,
+        ax=axis,
+        font_size=8,
+        label_pos=0.5,
+        bbox={"alpha": 0.85, "color": "white", "pad": 0.2},
+    )
+    axis.legend(
+        handles=[
+            Patch(facecolor="#c95c5c", edgecolor="#263238", label="Abuse history"),
+            Patch(facecolor="#5b8db8", edgecolor="#263238", label="No abuse history"),
+        ],
+        loc="best",
+    )
+    axis.axis("off")
+    st.pyplot(figure, clear_figure=True)
+    plt.close(figure)
+
+    member_rows = []
+    for member_id in sorted(graph.nodes, key=str):
+        history = history_by_customer.get(str(member_id), {})
+        labels = [int(label) for label in history.get("confirmed_abuse_labels", [])]
+        member_rows.append(
+            {
+                "customer_id": member_id,
+                "return_count": history.get("return_count", 0),
+                "abuse_history": "Yes" if any(labels) else "No",
+                "confirmed_abuse_labels": labels,
+            }
+        )
+    st.subheader("Ring member history")
+    st.dataframe(pd.DataFrame(member_rows), hide_index=True, width="stretch")
+
+
 st.sidebar.title("ReturnShield AI")
 view = st.sidebar.radio(
     "View",
@@ -307,6 +472,7 @@ view = st.sidebar.radio(
         "Case detail",
         "Model performance",
         "Financial impact",
+        "Abuse network",
     ],
 )
 
@@ -316,5 +482,7 @@ elif view == "Case detail":
     render_case_detail()
 elif view == "Model performance":
     render_model_performance()
-else:
+elif view == "Financial impact":
     render_financial_impact()
+else:
+    render_abuse_network()

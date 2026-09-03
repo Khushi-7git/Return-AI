@@ -12,3 +12,5 @@ faker
 pytest
 python-multipart
 requests
+matplotlib
+matplotlib
